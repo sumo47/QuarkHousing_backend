@@ -1,50 +1,55 @@
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 
 const sendEmail = async (options) => {
     // In test environment, allow mock/simulation unless testing simulated failure
     if (process.env.NODE_ENV === 'test') {
         if (options.simulateFailure || process.env.TEST_SIMULATE_EMAIL_FAILURE === 'true') {
-            throw new Error('SMTP connection refused: Simulated mail failure for test verification');
+            throw new Error('Email delivery failed: Simulated mail failure for test verification');
         }
-        return { messageId: 'test-message-id' };
+        return { messageId: 'test-message-id', id: 'test-message-id' };
     }
 
     try {
-        // 1. Create a transporter
-        const transporter = nodemailer.createTransport({
-            host: process.env.SMTP_HOST,
-            port: Number(process.env.SMTP_PORT) || 587,
-            secure: process.env.SMTP_SECURE === 'true',
-            family: 4,
-            auth: {
-                user: process.env.SMTP_USER,
-                pass: process.env.SMTP_PASS
-            }
-        });
+        const apiKey = process.env.RESEND_API_KEY;
+        const fromEmail = process.env.RESEND_FROM_EMAIL || 'Quark Housing <onboarding@resend.dev>';
+        const toEmail = options.email || options.to;
+        const textContent = options.message || options.text;
+        const htmlContent = options.html;
 
-        // 2. Define the email options
-        const mailOptions = {
-            from: '"Quark Housing" <support@quarkhousing.com>', // Sender address
-            to: options.email,
+        const resend = new Resend(apiKey);
+
+        const payload = {
+            from: fromEmail,
+            to: toEmail,
             subject: options.subject,
-            text: options.message,
-            html: options.html // Optional HTML content
         };
 
-        // 3. Send the email
-        await transporter.sendMail(mailOptions);
+        if (htmlContent) {
+            payload.html = htmlContent;
+        }
+        if (textContent) {
+            payload.text = textContent;
+        }
+
+        const { data, error } = await resend.emails.send(payload);
+
+        if (error) {
+            throw new Error(error.message || 'Resend email delivery failed');
+        }
+
+        return { messageId: data?.id, id: data?.id };
     } catch (mailError) {
-        // In local development, if SMTP credentials fail or network is offline,
+        // In local development, if email credentials fail or network is offline,
         // log the email & OTP to the terminal console so the developer can proceed without being blocked.
         if (process.env.NODE_ENV !== 'production') {
             console.log('\n======================================================');
-            console.log('⚠️ [DEV MODE] SMTP delivery failed (' + mailError.message + ')');
+            console.log('⚠️ [DEV MODE] Email delivery failed (' + mailError.message + ')');
             console.log('📬 [EMAIL DISPATCH FALLBACK]');
-            console.log('To:     ', options.email);
+            console.log('To:     ', options.email || options.to);
             console.log('Subject:', options.subject);
-            console.log('Body:   ', options.message);
+            console.log('Body:   ', options.message || options.text);
             console.log('======================================================\n');
-            return { messageId: 'dev-fallback-message-id' };
+            return { messageId: 'dev-fallback-message-id', id: 'dev-fallback-message-id' };
         }
         // In production, re-throw so authoritative error handling takes place
         throw mailError;
